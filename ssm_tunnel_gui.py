@@ -24,7 +24,20 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPixmap, QColor, QBrush, QPalette, QIntValidator
 
 # ─── 버전 ─────────────────────────────────────────────────────────────────────
-APP_VERSION  = "1.0.0"
+def _read_version() -> str:
+    try:
+        # .app 번들 내부: Contents/MacOS/executable → Contents/Resources/VERSION
+        for parent in Path(sys.executable).parents:
+            if parent.suffix == ".app":
+                return (parent / "Contents" / "Resources" / "VERSION").read_text().strip()
+    except Exception:
+        pass
+    try:
+        return (Path(__file__).parent / "VERSION").read_text().strip()
+    except Exception:
+        return "0.0.0"
+
+APP_VERSION  = _read_version()
 GITHUB_REPO  = "ralpioxxcs/ssm-tunnel-helper"
 
 # ─── AWS CLI 경로 ─────────────────────────────────────────────────────────────

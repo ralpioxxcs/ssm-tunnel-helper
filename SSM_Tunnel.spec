@@ -6,7 +6,7 @@ a = Analysis(
     ['ssm_tunnel_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('VERSION', '.')],
     hiddenimports=[
         'PyQt5.sip',
         'PyQt5.QtCore',
