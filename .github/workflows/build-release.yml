@@ -1,0 +1,77 @@
+name: Build & Release DMG
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-14   # Apple Silicon (M1) — arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install PyQt5 pyinstaller
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Read version
+        run: echo "VERSION=$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_ENV
+
+      - name: Build icon
+        run: python make_icon.py
+
+      - name: PyInstaller build
+        run: python -m PyInstaller SSM_Tunnel.spec --noconfirm
+
+      - name: Ad-hoc code sign
+        run: codesign --force --deep --sign - "dist/SSM Tunnel.app"
+
+      - name: Create DMG
+        run: |
+          STAGING=$(mktemp -d)
+          cp -r "dist/SSM Tunnel.app" "$STAGING/"
+          create-dmg \
+            --volname "SSM Tunnel" \
+            --window-pos 200 140 \
+            --window-size 560 400 \
+            --icon-size 128 \
+            --icon "SSM Tunnel.app" 145 200 \
+            --hide-extension "SSM Tunnel.app" \
+            --app-drop-link 415 200 \
+            --no-internet-enable \
+            "SSM-Tunnel-v${{ env.VERSION }}.dmg" \
+            "$STAGING/"
+          rm -rf "$STAGING"
+
+      - name: Create ZIP (for auto-update)
+        run: ditto -c -k --keepParent "dist/SSM Tunnel.app" "SSM-Tunnel-v${{ env.VERSION }}-app.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "SSM Tunnel v${{ env.VERSION }}"
+          body: |
+            ## 설치 방법 (최초)
+            1. `SSM-Tunnel-v${{ env.VERSION }}.dmg` 다운로드
+            2. DMG 열고 **SSM Tunnel.app**을 Applications 폴더로 드래그
+            3. 첫 실행 시 Gatekeeper 차단되면 Terminal에서:
+               ```
+               xattr -cr "/Applications/SSM Tunnel.app"
+               ```
+
+            ## 기존 사용자
+            앱 실행 시 자동으로 업데이트 알림이 표시됩니다.
+          files: |
+            SSM-Tunnel-v${{ env.VERSION }}.dmg
+            SSM-Tunnel-v${{ env.VERSION }}-app.zip
+          generate_release_notes: false

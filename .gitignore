@@ -1,0 +1,28 @@
+# 빌드 산출물
+build/
+dist/
+*.dmg
+*.zip
+rw.*.dmg
+
+# 아이콘 (make_icon.py가 빌드 시 자동 생성)
+icon.icns
+*.iconset/
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Claude Code 로컬 설정
+.claude/
+
+# 에디터
+.idea/
+.vscode/
+*.swp
