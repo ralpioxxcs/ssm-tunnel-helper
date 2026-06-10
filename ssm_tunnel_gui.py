@@ -395,7 +395,7 @@ class AutoUpdateThread(QThread):
         self._cancel = True
 
     def run(self):
-        import urllib.request, zipfile, tempfile, ssl
+        import urllib.request, tempfile, ssl, subprocess
         try:
             ctx = ssl.create_default_context()
             req = urllib.request.Request(self.zip_url,
@@ -418,8 +418,8 @@ class AutoUpdateThread(QThread):
                 return
             self.progress.emit(100)
             tmp_dir = tempfile.mkdtemp(prefix="ssm-update-")
-            with zipfile.ZipFile(tmp_zip, "r") as zf:
-                zf.extractall(tmp_dir)
+            # ditto -x -k: macOS 확장 속성(코드서명) 보존하며 ZIP 해제
+            subprocess.run(["ditto", "-x", "-k", tmp_zip, tmp_dir], check=True)
             os.unlink(tmp_zip)
             app_path = next(
                 (os.path.join(tmp_dir, e) for e in os.listdir(tmp_dir) if e.endswith(".app")),
@@ -1321,9 +1321,8 @@ class MainWindow(QMainWindow):
             "#!/bin/bash\n"
             "sleep 1\n"
             f'rm -rf "{cur}"\n'
-            f'cp -r "{new_app_path}" "{os.path.dirname(cur)}/"\n'
+            f'ditto "{new_app_path}" "{cur}"\n'
             f'xattr -rd com.apple.quarantine "{cur}" 2>/dev/null || true\n'
-            f'xattr -cr "{cur}" 2>/dev/null || true\n'
             f'codesign --force --deep --sign - "{cur}" 2>/dev/null || true\n'
             f'open "{cur}"\n'
             f'rm -rf "{os.path.dirname(new_app_path)}"\n'
