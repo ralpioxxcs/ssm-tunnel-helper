@@ -1322,7 +1322,9 @@ class MainWindow(QMainWindow):
             "sleep 1\n"
             f'rm -rf "{cur}"\n'
             f'cp -r "{new_app_path}" "{os.path.dirname(cur)}/"\n'
-            f'xattr -cr "{cur}"\n'
+            f'xattr -rd com.apple.quarantine "{cur}" 2>/dev/null || true\n'
+            f'xattr -cr "{cur}" 2>/dev/null || true\n'
+            f'codesign --force --deep --sign - "{cur}" 2>/dev/null || true\n'
             f'open "{cur}"\n'
             f'rm -rf "{os.path.dirname(new_app_path)}"\n'
         )
