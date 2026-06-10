@@ -630,6 +630,140 @@ class TunnelThread(QThread):
             pass
 
 
+# ─── 사전 설치 가이드 다이얼로그 ─────────────────────────────────────────────
+class SetupGuideDialog(QDialog):
+    """처음 실행 시 또는 사전 조건 미충족 시 표시되는 설치 가이드."""
+
+    _STEPS = [
+        {
+            "title": "AWS CLI",
+            "check": lambda: shutil.which("aws", path=(
+                "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:"
+                + os.environ.get("PATH", ""))),
+            "desc":  "AWS 서비스 접근에 필요한 CLI 도구입니다.",
+            "cmd":   "brew install awscli",
+        },
+        {
+            "title": "Session Manager Plugin",
+            "check": lambda: shutil.which("session-manager-plugin", path=(
+                "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:"
+                + os.environ.get("PATH", ""))),
+            "desc":  "SSM 터널링에 필요한 AWS 플러그인입니다.",
+            "cmd":   "brew install --cask session-manager-plugin",
+        },
+        {
+            "title": "AWS SSO 프로파일 설정",
+            "check": lambda: bool(parse_aws_profiles()),
+            "desc":  "~/.aws/config 에 SSO 프로파일을 등록합니다.",
+            "cmd":   "aws configure sso",
+        },
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("시작 가이드")
+        self.setMinimumWidth(520)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        if MACOS:
+            self.setStyleSheet(
+                f"QDialog {{ background: {'#1c1c1e' if _is_dark() else '#f2f2f7'}; }}"
+            )
+        self._build()
+        self._refresh()
+
+    def _build(self):
+        vbox = QVBoxLayout(self)
+        vbox.setContentsMargins(24, 20, 24, 20)
+        vbox.setSpacing(16)
+
+        title = QLabel("SSM Tunnel 시작 가이드")
+        f = QFont(); f.setBold(True); f.setPointSize(15); title.setFont(f)
+        vbox.addWidget(title)
+
+        sub = QLabel("아래 항목을 터미널에서 순서대로 설치하세요.\n설치 후 '다시 확인' 버튼을 누르면 상태가 갱신됩니다.")
+        sub.setStyleSheet("color: #8e8e93; font-size: 12px;")
+        sub.setWordWrap(True)
+        vbox.addWidget(sub)
+
+        self._rows = []
+        for step in self._STEPS:
+            row = self._make_row(step)
+            vbox.addWidget(row)
+            self._rows.append(row)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background: #d2d2d7; border: none; max-height: 1px;")
+        vbox.addWidget(sep)
+
+        btn_row = QHBoxLayout()
+        refresh_btn = QPushButton("↻  다시 확인")
+        refresh_btn.clicked.connect(self._refresh)
+        close_btn = QPushButton("시작하기")
+        close_btn.clicked.connect(self.accept)
+        if MACOS:
+            close_btn.setProperty("role", "primary")
+        btn_row.addWidget(refresh_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        vbox.addLayout(btn_row)
+
+    def _make_row(self, step: dict) -> QFrame:
+        frame = QFrame()
+        frame.setFrameShape(QFrame.NoFrame)
+        dark = _is_dark()
+        frame.setStyleSheet(
+            f"QFrame {{ background: {'#2c2c2e' if dark else '#ffffff'};"
+            f" border-radius: 8px; }}"
+            f"QLabel {{ background: transparent; border: none; }}"
+        )
+        h = QHBoxLayout(frame)
+        h.setContentsMargins(14, 10, 14, 10)
+        h.setSpacing(12)
+
+        status_lbl = QLabel()
+        status_lbl.setFixedWidth(22)
+        status_lbl.setAlignment(Qt.AlignCenter)
+        status_lbl.setStyleSheet("font-size: 16px;")
+
+        info = QVBoxLayout(); info.setSpacing(2)
+        title_lbl = QLabel(step["title"])
+        tf = QFont(); tf.setBold(True); title_lbl.setFont(tf)
+        desc_lbl = QLabel(step["desc"])
+        desc_lbl.setStyleSheet("font-size: 11px; color: #8e8e93;")
+        info.addWidget(title_lbl); info.addWidget(desc_lbl)
+
+        cmd_lbl = QLabel(step["cmd"])
+        cmd_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        cmd_bg = "#1c1c1e" if dark else "#f0f0f5"
+        cmd_lbl.setStyleSheet(
+            f"font-family: Menlo, monospace; font-size: 12px;"
+            f" background: {cmd_bg}; border-radius: 4px; padding: 4px 8px;"
+            f" color: {'#e5e5ea' if dark else '#1d1d1f'};"
+        )
+
+        h.addWidget(status_lbl)
+        h.addLayout(info, 1)
+        h.addWidget(cmd_lbl)
+
+        frame._status_lbl = status_lbl
+        frame._check_fn   = step["check"]
+        return frame
+
+    def _refresh(self):
+        for row in self._rows:
+            ok = bool(row._check_fn())
+            row._status_lbl.setText("✅" if ok else "❌")
+
+
+def _needs_setup() -> bool:
+    """aws CLI 또는 session-manager-plugin 이 없으면 True."""
+    path = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:" + os.environ.get("PATH", "")
+    return (
+        not shutil.which("aws", path=path)
+        or not shutil.which("session-manager-plugin", path=path)
+    )
+
+
 # ─── AWS 계정 카드 (상단 스트립 내 개별 위젯) ───────────────────────────────
 class AccountCard(QFrame):
     """One AWS profile — shows cred status, SSO login, and remove button."""
@@ -1146,9 +1280,11 @@ class MainWindow(QMainWindow):
         self._profiles: list          = []
         self._threads:  dict          = {}   # profile_id → TunnelThread
         self._cards:    dict          = {}   # profile_id → ProfileCard
+        self._statuses: dict          = {}   # profile_id → status key
         self._selected: Optional[str] = None
         self._tray:     Optional[QSystemTrayIcon] = None
         self._tray_warned = False
+        self._tray_conn_actions: list = []
 
         self._update_thread:      Optional[UpdateCheckThread] = None
         self._auto_update_thread: Optional[AutoUpdateThread]  = None
@@ -1158,6 +1294,8 @@ class MainWindow(QMainWindow):
         self._build_tray()
         self._load_config()
         QTimer.singleShot(4000, self._start_update_check)
+        if _needs_setup():
+            QTimer.singleShot(300, self._show_setup_guide)
 
     # ── Log collapse helpers ──────────────────────────────────────────────────
     def _refresh_log_hdr(self):
@@ -1641,7 +1779,8 @@ class MainWindow(QMainWindow):
     def _on_status(self, pid: str, key: str):
         card = self._cards.get(pid)
         if card: card.update_status(key)
-        if key in ("error", "expired"):
+        self._statuses[pid] = key
+        if key in ("error", "expired", "disconnected"):
             self._threads.pop(pid, None)
             if self._selected == pid: self.edit_panel.lock(False)
         n = sum(1 for t in self._threads.values() if t.isRunning())
@@ -1649,6 +1788,7 @@ class MainWindow(QMainWindow):
             color = STATUS["connected"][0] if n else STATUS["disconnected"][0]
             self._tray.setIcon(QIcon(dot_pixmap(color, 16)))
             self._tray.setToolTip(f"SSM Tunnel — {n}개 연결 중" if n else "SSM Tunnel — 연결 안됨")
+        self._rebuild_tray_connections()
 
     def _on_relogin_needed(self, aws_profile: str):
         self._log("SSO", f"[{aws_profile}] 세션 만료 — 상단 계정 카드에서 SSO 로그인하세요.")
@@ -1703,14 +1843,44 @@ class MainWindow(QMainWindow):
         self._tray.activated.connect(
             lambda r: (self.show(), self.activateWindow()) if r == QSystemTrayIcon.Trigger and not self.isVisible()
             else self.hide() if r == QSystemTrayIcon.Trigger else None)
-        menu = QMenu()
-        menu.addAction("창 열기", lambda: (self.show(), self.activateWindow()))
-        menu.addSeparator()
-        menu.addAction("업데이트 확인", self._check_update_manual)
-        menu.addSeparator()
-        menu.addAction("종료", self._quit)
-        self._tray.setContextMenu(menu)
+        self._tray_menu = QMenu()
+        # 연결 목록 섹션 (동적) — 구분선 앞에 삽입
+        self._tray_sep_after_conns = self._tray_menu.addSeparator()
+        self._tray_menu.addAction("창 열기", lambda: (self.show(), self.activateWindow()))
+        self._tray_menu.addSeparator()
+        self._tray_menu.addAction("업데이트 확인", self._check_update_manual)
+        self._tray_menu.addSeparator()
+        self._tray_menu.addAction("종료", self._quit)
+        self._tray.setContextMenu(self._tray_menu)
         self._tray.show()
+        self._rebuild_tray_connections()
+
+    def _rebuild_tray_connections(self):
+        if not self._tray: return
+        # 기존 동적 항목 제거
+        for a in self._tray_conn_actions:
+            self._tray_menu.removeAction(a)
+        self._tray_conn_actions.clear()
+
+        before = self._tray_sep_after_conns
+        active = [(p, self._statuses.get(p.id, "disconnected"))
+                  for p in self._profiles
+                  if self._statuses.get(p.id, "disconnected") in ("connected", "connecting")]
+
+        if not active:
+            a = QAction("연결 없음", self)
+            a.setEnabled(False)
+            self._tray_menu.insertAction(before, a)
+            self._tray_conn_actions.append(a)
+        else:
+            for p, skey in active:
+                icon_ch = "●" if skey == "connected" else "◌"
+                color, status_txt = STATUS.get(skey, STATUS["disconnected"])
+                label = f"{icon_ch}  {p.name}    :{p.local_port}  {status_txt}"
+                a = QAction(label, self)
+                a.triggered.connect(lambda _, _p=p: (self.show(), self.activateWindow(), self._select(_p.id)))
+                self._tray_menu.insertAction(before, a)
+                self._tray_conn_actions.append(a)
 
     def closeEvent(self, event):
         if self._tray and self._tray.isVisible():
@@ -1721,6 +1891,10 @@ class MainWindow(QMainWindow):
             self.hide(); event.ignore()
         else:
             self._quit()
+
+    def _show_setup_guide(self):
+        dlg = SetupGuideDialog(self)
+        dlg.exec_()
 
     def _quit(self):
         for th in list(self._threads.values()): th.stop(); th.wait(3000)
