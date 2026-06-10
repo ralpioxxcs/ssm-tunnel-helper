@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: macos-14   # Apple Silicon (M1) — arm64
+    permissions:
+      contents: write   # GitHub Release 생성 권한
 
     steps:
       - name: Checkout
