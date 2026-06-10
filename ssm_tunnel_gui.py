@@ -24,8 +24,8 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPixmap, QColor, QBrush, QPalette, QIntValidator
 
 # ─── 버전 ─────────────────────────────────────────────────────────────────────
-APP_VERSION  = "1.0.1"
-GITHUB_REPO  = "ralpioxxcs/ssm-tunnel-helper"   # "owner/repo" 형식으로 설정하면 시작 시 업데이트 알림 활성화
+APP_VERSION  = "1.0.0"
+GITHUB_REPO  = "ralpioxxcs/ssm-tunnel-helper"
 
 # ─── AWS CLI 경로 ─────────────────────────────────────────────────────────────
 # GUI 앱은 Finder/Dock 실행 시 쉘 PATH를 상속하지 않으므로 직접 탐색
@@ -333,6 +333,7 @@ def check_credentials(profile: Optional[str], region: str,
 # ─── 업데이트 체크 스레드 ────────────────────────────────────────────────────────
 class UpdateCheckThread(QThread):
     update_available = pyqtSignal(str, str, str)   # version, html_url, zip_url
+    check_error      = pyqtSignal(str)             # error message
 
     def __init__(self, current: str, repo: str):
         super().__init__()
@@ -343,23 +344,20 @@ class UpdateCheckThread(QThread):
         if not self.repo:
             return
         try:
-            import urllib.request, json as _json, ssl
-            url = f"https://api.github.com/repos/{self.repo}/releases/latest"
-            req = urllib.request.Request(url, headers={"User-Agent": "SSM-Tunnel-App"})
+            import urllib.request, ssl
+            # repo의 VERSION 파일을 직접 읽음 — API/리다이렉트 불필요
+            url = f"https://raw.githubusercontent.com/{self.repo}/main/VERSION"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             ctx = ssl.create_default_context()
             with urllib.request.urlopen(req, context=ctx, timeout=8) as resp:
-                data = _json.loads(resp.read())
-            tag     = data.get("tag_name", "").lstrip("v")
-            rel_url = data.get("html_url", "")
-            zip_url = ""
-            for asset in data.get("assets", []):
-                if asset.get("name", "").endswith("-app.zip"):
-                    zip_url = asset.get("browser_download_url", "")
-                    break
+                tag = resp.read().decode().strip()
+            rel_url = f"https://github.com/{self.repo}/releases/tag/v{tag}"
+            zip_url = (f"https://github.com/{self.repo}/releases/download/"
+                       f"v{tag}/SSM-Tunnel-v{tag}-app.zip")
             if tag and self._newer(tag):
                 self.update_available.emit(tag, rel_url, zip_url)
-        except Exception:
-            pass   # 네트워크 오류 / private repo → 무시
+        except Exception as e:
+            self.check_error.emit(str(e))
 
     def _newer(self, remote: str) -> bool:
         try:
@@ -1335,6 +1333,8 @@ class MainWindow(QMainWindow):
             return
         self._update_thread = UpdateCheckThread(APP_VERSION, GITHUB_REPO)
         self._update_thread.update_available.connect(self._on_update_available)
+        self._update_thread.check_error.connect(
+            lambda e: self._log("업데이트", f"버전 체크 실패: {e}"))
         self._update_thread.start()
 
     def _check_update_manual(self):
@@ -1356,8 +1356,13 @@ class MainWindow(QMainWindow):
         self._manual_check_found = False
         self._update_thread = UpdateCheckThread(APP_VERSION, GITHUB_REPO)
         self._update_thread.update_available.connect(self._on_update_available)
+        self._update_thread.check_error.connect(self._on_check_error)
         self._update_thread.finished.connect(self._on_manual_check_done)
         self._update_thread.start()
+
+    def _on_check_error(self, msg: str):
+        self._manual_check_found = True   # "최신 버전" 메시지 방지
+        self._banner_set_state("error", msg=msg)
 
     def _on_manual_check_done(self):
         if not self._manual_check_found:
