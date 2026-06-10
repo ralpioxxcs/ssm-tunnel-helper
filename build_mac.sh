@@ -35,6 +35,13 @@ if ! "$PYTHON" -c "from PyQt5.QtWidgets import QApplication" 2>/dev/null; then
 fi
 ok "PyQt5 OK"
 
+info "certifi 확인..."
+if ! "$PYTHON" -c "import certifi" 2>/dev/null; then
+    warn "certifi 없음 — pip 설치 중..."
+    pip3 install --quiet certifi
+fi
+ok "certifi OK"
+
 # ── 3. PyInstaller 확인/설치 ─────────────────────────────────────────────────
 info "PyInstaller 확인..."
 if ! "$PYTHON" -m PyInstaller --version &>/dev/null; then

@@ -6,7 +6,10 @@ a = Analysis(
     ['ssm_tunnel_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('VERSION', '.')],
+    datas=[('VERSION', '.')] + (
+        __import__('PyInstaller.utils.hooks', fromlist=['collect_data_files'])
+        .collect_data_files('certifi')
+    ),
     hiddenimports=[
         'PyQt5.sip',
         'PyQt5.QtCore',

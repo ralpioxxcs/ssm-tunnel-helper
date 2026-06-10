@@ -343,6 +343,15 @@ def check_credentials(profile: Optional[str], region: str,
         return False
 
 
+# ─── SSL 헬퍼 (PyInstaller 번들 앱은 시스템 인증서를 못 찾으므로 certifi 사용) ──
+def _ssl_ctx():
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
 # ─── 업데이트 체크 스레드 ────────────────────────────────────────────────────────
 class UpdateCheckThread(QThread):
     update_available = pyqtSignal(str, str, str)   # version, html_url, zip_url
@@ -357,11 +366,10 @@ class UpdateCheckThread(QThread):
         if not self.repo:
             return
         try:
-            import urllib.request, ssl
-            # repo의 VERSION 파일을 직접 읽음 — API/리다이렉트 불필요
+            import urllib.request
             url = f"https://raw.githubusercontent.com/{self.repo}/main/VERSION"
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            ctx = ssl.create_default_context()
+            ctx = _ssl_ctx()
             with urllib.request.urlopen(req, context=ctx, timeout=8) as resp:
                 tag = resp.read().decode().strip()
             rel_url = f"https://github.com/{self.repo}/releases/tag/v{tag}"
@@ -395,9 +403,9 @@ class AutoUpdateThread(QThread):
         self._cancel = True
 
     def run(self):
-        import urllib.request, tempfile, ssl, subprocess
+        import urllib.request, tempfile, subprocess
         try:
-            ctx = ssl.create_default_context()
+            ctx = _ssl_ctx()
             req = urllib.request.Request(self.zip_url,
                                          headers={"User-Agent": "SSM-Tunnel-App"})
             tmp_zip = tempfile.mktemp(suffix=".zip")
