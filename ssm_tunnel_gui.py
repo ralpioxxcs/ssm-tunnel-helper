@@ -24,7 +24,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPixmap, QColor, QBrush, QPalette, QIntValidator
 
 # ─── 버전 ─────────────────────────────────────────────────────────────────────
-APP_VERSION  = "1.0.0"
+APP_VERSION  = "1.0.1"
 GITHUB_REPO  = "ralpioxxcs/ssm-tunnel-helper"   # "owner/repo" 형식으로 설정하면 시작 시 업데이트 알림 활성화
 
 # ─── AWS CLI 경로 ─────────────────────────────────────────────────────────────
@@ -1133,11 +1133,46 @@ class MainWindow(QMainWindow):
 
         self._update_thread:      Optional[UpdateCheckThread] = None
         self._auto_update_thread: Optional[AutoUpdateThread]  = None
+        self._manual_check_found: bool = False
 
         self._build_ui()
         self._build_tray()
         self._load_config()
         QTimer.singleShot(4000, self._start_update_check)
+
+    # ── Log collapse helpers ──────────────────────────────────────────────────
+    def _refresh_log_hdr(self):
+        dark = _is_dark()
+        bd   = "#3a3a3c" if dark else "#d2d2d7"
+        txt  = "#ffffff" if dark else "#1d1d1f"
+        txt2 = "#8e8e93"
+        self._log_hdr.setStyleSheet(
+            f"QFrame {{ border:none; border-top:1px solid {bd}; background:transparent; }}"
+            f"QLabel {{ color:{txt}; background:transparent; border:none; }}"
+            f"QPushButton {{ color:{txt2}; background:transparent; border:none; "
+            f"padding:2px 6px; font-size:12px; }} "
+            f"QPushButton:hover {{ color:{txt}; }}"
+        )
+        self._log_chevron.setText("▼" if self._log_expanded else "▶")
+        if self._log_unread > 0 and not self._log_expanded:
+            self._log_badge.setText(f"  +{self._log_unread}개")
+            self._log_badge.setStyleSheet(
+                f"color:{'#ff9f0a' if dark else '#f59e0b'}; font-size:11px; font-weight:bold;")
+            self._log_badge.show()
+        else:
+            self._log_badge.hide()
+
+    def _toggle_log(self):
+        self._log_expanded = not self._log_expanded
+        self._log_body.setVisible(self._log_expanded)
+        if self._log_expanded:
+            self._log_unread = 0
+        self._refresh_log_hdr()
+
+    def _log_clear(self):
+        self.w_log.clear()
+        self._log_unread = 0
+        self._refresh_log_hdr()
 
     # ── Dark mode helpers ─────────────────────────────────────────────────────
     @staticmethod
@@ -1164,6 +1199,7 @@ class MainWindow(QMainWindow):
         self.edit_panel.refresh_style()
         if not self.update_banner.isHidden():
             self.update_banner.setStyleSheet(self._banner_style())
+        self._refresh_log_hdr()
 
     @staticmethod
     def _banner_style() -> str:
@@ -1252,12 +1288,6 @@ class MainWindow(QMainWindow):
         self.update_banner.show()
         self.update_banner.setStyleSheet(self._banner_style())
 
-    def _on_update_available(self, version: str, html_url: str, zip_url: str):
-        if zip_url:
-            self._banner_set_state("notify_auto", version=version, zip_url=zip_url)
-        else:
-            self._banner_set_state("notify_web", version=version, html_url=html_url)
-
     def _start_download(self, zip_url: str):
         self._banner_set_state("downloading")
         self._auto_update_thread = AutoUpdateThread(zip_url)
@@ -1306,6 +1336,47 @@ class MainWindow(QMainWindow):
         self._update_thread = UpdateCheckThread(APP_VERSION, GITHUB_REPO)
         self._update_thread.update_available.connect(self._on_update_available)
         self._update_thread.start()
+
+    def _check_update_manual(self):
+        if not GITHUB_REPO:
+            QMessageBox.information(self, "업데이트 확인", "GITHUB_REPO가 설정되지 않았습니다.")
+            return
+        if self._update_thread and self._update_thread.isRunning():
+            return
+        # 즉각적인 피드백: 배너에 "확인 중" 표시
+        self._banner_lbl.setText("업데이트 확인 중...")
+        try: self._banner_action.clicked.disconnect()
+        except Exception: pass
+        self._banner_action.hide()
+        self._banner_close.setText("✕")
+        self.update_banner.show()
+        self.update_banner.setStyleSheet(self._banner_style())
+        self.show(); self.activateWindow()
+
+        self._manual_check_found = False
+        self._update_thread = UpdateCheckThread(APP_VERSION, GITHUB_REPO)
+        self._update_thread.update_available.connect(self._on_update_available)
+        self._update_thread.finished.connect(self._on_manual_check_done)
+        self._update_thread.start()
+
+    def _on_manual_check_done(self):
+        if not self._manual_check_found:
+            # 최신 버전 — 배너에 표시 후 3초 뒤 숨김
+            self._banner_lbl.setText(f"✓  최신 버전입니다. (v{APP_VERSION})")
+            try: self._banner_action.clicked.disconnect()
+            except Exception: pass
+            self._banner_action.hide()
+            self._banner_close.setText("✕")
+            self.update_banner.show()
+            self.update_banner.setStyleSheet(self._banner_style())
+            QTimer.singleShot(3000, self.update_banner.hide)
+
+    def _on_update_available(self, version: str, html_url: str, zip_url: str):
+        self._manual_check_found = True
+        if zip_url:
+            self._banner_set_state("notify_auto", version=version, zip_url=zip_url)
+        else:
+            self._banner_set_state("notify_web", version=version, html_url=html_url)
 
     # ── UI ────────────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -1390,19 +1461,60 @@ class MainWindow(QMainWindow):
         mid_lay.addWidget(self.edit_panel, 1)
         vbox.addWidget(mid, 1)
 
-        # ── Bottom: log ───────────────────────────────────────────────────
-        log_grp = QGroupBox("로그")
-        lgl = QVBoxLayout(log_grp)
+        # ── Bottom: collapsible log ───────────────────────────────────────
+        self._log_expanded = False
+        self._log_unread   = 0
+
+        log_wrap = QWidget()
+        log_vbox = QVBoxLayout(log_wrap)
+        log_vbox.setContentsMargins(0, 0, 0, 0)
+        log_vbox.setSpacing(0)
+
+        # Header row (always visible, clickable)
+        self._log_hdr = QFrame()
+        self._log_hdr.setCursor(Qt.PointingHandCursor)
+        hdr_lay = QHBoxLayout(self._log_hdr)
+        hdr_lay.setContentsMargins(2, 5, 2, 5)
+        hdr_lay.setSpacing(6)
+
+        self._log_chevron = QLabel("▶")
+        lbl_log = QLabel("로그")
+        f = QFont(); f.setBold(True); f.setPointSize(11)
+        lbl_log.setFont(f)
+
+        self._log_badge = QLabel()
+        self._log_badge.setFixedHeight(16)
+        self._log_badge.hide()
+
+        clr = QPushButton("지우기")
+        clr.setFixedWidth(60)
+        clr.setFixedHeight(24)
+        clr.clicked.connect(self._log_clear)
+
+        hdr_lay.addWidget(self._log_chevron)
+        hdr_lay.addWidget(lbl_log)
+        hdr_lay.addWidget(self._log_badge)
+        hdr_lay.addStretch()
+        hdr_lay.addWidget(clr)
+        log_vbox.addWidget(self._log_hdr)
+        self._log_hdr.mousePressEvent = lambda _: self._toggle_log()
+
+        # Body (collapsed by default)
+        self._log_body = QWidget()
+        body_lay = QVBoxLayout(self._log_body)
+        body_lay.setContentsMargins(0, 4, 0, 0)
+        body_lay.setSpacing(0)
+        mono = "Menlo" if MACOS else ("Courier New" if sys.platform == "win32" else "Monospace")
         self.w_log = QTextEdit()
         self.w_log.setReadOnly(True)
-        mono = "Menlo" if MACOS else ("Courier New" if sys.platform == "win32" else "Monospace")
         self.w_log.setFont(QFont(mono, 9))
-        self.w_log.setMaximumHeight(160)
-        lgl.addWidget(self.w_log)
-        clr = QPushButton("지우기"); clr.setFixedWidth(60)
-        clr.clicked.connect(self.w_log.clear)
-        lgl.addWidget(clr, alignment=Qt.AlignRight)
-        vbox.addWidget(log_grp)
+        self.w_log.setFixedHeight(150)
+        body_lay.addWidget(self.w_log)
+        self._log_body.hide()
+        log_vbox.addWidget(self._log_body)
+
+        self._refresh_log_hdr()
+        vbox.addWidget(log_wrap)
 
     # ── Profile list helpers ──────────────────────────────────────────────────
     def _add_card(self, profile: Profile):
@@ -1526,6 +1638,9 @@ class MainWindow(QMainWindow):
         prefix = f"<b style='color:#1565C0'>[{profile_name}]</b>"
         self.w_log.append(f"{prefix} {line}")
         self.w_log.verticalScrollBar().setValue(self.w_log.verticalScrollBar().maximum())
+        if not self._log_expanded:
+            self._log_unread += 1
+            self._refresh_log_hdr()
 
     # ── Config ────────────────────────────────────────────────────────────────
     def _load_config(self):
@@ -1563,6 +1678,8 @@ class MainWindow(QMainWindow):
             else self.hide() if r == QSystemTrayIcon.Trigger else None)
         menu = QMenu()
         menu.addAction("창 열기", lambda: (self.show(), self.activateWindow()))
+        menu.addSeparator()
+        menu.addAction("업데이트 확인", self._check_update_manual)
         menu.addSeparator()
         menu.addAction("종료", self._quit)
         self._tray.setContextMenu(menu)
